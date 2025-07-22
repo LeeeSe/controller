@@ -47,6 +47,12 @@ pub struct ControllerState {
 }
 
 impl ControllerState {
+    /// 获取规范化的右摇杆X值，解决 -32768/32767 不对称问题
+    pub fn normalized_rx(&self) -> i16 {
+        // 将 -32768 限制为 -32767，保持对称性
+        if self.rx == i16::MIN { -32767 } else { self.rx }
+    }
+
     /// 从 HID 缓冲区解析手柄状态
     pub fn from_buffer(buf: &[u8], analog_trigger_threshold: u8) -> Self {
         let lt = buf[LT_OFFSET];
@@ -163,6 +169,16 @@ impl HidController {
         }
     }
 
+    /// 尝试重新连接设备（用于重连逻辑）
+    pub fn try_reconnect() -> ControllerResult<Self> {
+        let api = HidApi::new()
+            .map_err(|e| ControllerError::HidDevice(format!("HidApi 初始化失败: {}", e)))?;
+
+        let device = Self::find_and_open_device(&api).ok_or(ControllerError::DeviceNotFound)?;
+
+        Ok(Self { device })
+    }
+
     /// 获取设备信息字符串
     pub fn get_device_info() -> String {
         let pids: Vec<String> = SUPPORTED_PRODUCT_IDS
@@ -207,5 +223,40 @@ mod tests {
         assert_eq!(BUTTON_B, 0x20);
         assert_eq!(BUTTON_X, 0x40);
         assert_eq!(BUTTON_Y, 0x80);
+    }
+
+    #[test]
+    fn test_normalized_rx() {
+        let mut buf = [0u8; 64];
+
+        // 测试正常值
+        buf[RX_OFFSET] = 0x00;
+        buf[RX_OFFSET + 1] = 0x40; // 16384
+        let state = ControllerState::from_buffer(&buf, 20);
+        assert_eq!(state.normalized_rx(), 16384);
+
+        // 测试最大正值
+        buf[RX_OFFSET] = 0xFF;
+        buf[RX_OFFSET + 1] = 0x7F; // 32767
+        let state = ControllerState::from_buffer(&buf, 20);
+        assert_eq!(state.normalized_rx(), 32767);
+
+        // 测试最小负值 (-32768)，应该被规范化为 -32767
+        buf[RX_OFFSET] = 0x00;
+        buf[RX_OFFSET + 1] = 0x80; // -32768
+        let state = ControllerState::from_buffer(&buf, 20);
+        assert_eq!(state.normalized_rx(), -32767);
+
+        // 测试普通负值
+        buf[RX_OFFSET] = 0x00;
+        buf[RX_OFFSET + 1] = 0xC0; // -16384
+        let state = ControllerState::from_buffer(&buf, 20);
+        assert_eq!(state.normalized_rx(), -16384);
+
+        // 测试零值
+        buf[RX_OFFSET] = 0x00;
+        buf[RX_OFFSET + 1] = 0x00; // 0
+        let state = ControllerState::from_buffer(&buf, 20);
+        assert_eq!(state.normalized_rx(), 0);
     }
 }

@@ -25,6 +25,8 @@ pub struct ControllerConfig {
     pub direct_scroll_sensitivity: f64,
     /// 步调器循环频率 (Hz)
     pub pacer_loop_hz: u64,
+    /// 重连配置
+    pub reconnection: ReconnectionConfig,
 }
 
 impl Default for ControllerConfig {
@@ -40,6 +42,7 @@ impl Default for ControllerConfig {
             gyro_sensitivity: 0.08,
             direct_scroll_sensitivity: 20.0,
             pacer_loop_hz: 75,
+            reconnection: ReconnectionConfig::default(),
         }
     }
 }
@@ -174,6 +177,33 @@ pub enum ButtonAction {
     CustomShortcut { modifiers: Vec<String>, key: String },
     /// 无操作
     None,
+}
+
+/// 重连配置结构体
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReconnectionConfig {
+    /// 是否启用自动重连
+    pub enable_auto_reconnect: bool,
+    /// 重连尝试间隔（毫秒）
+    pub reconnect_interval_ms: u64,
+    /// 最大重连尝试次数（0表示无限制）
+    pub max_reconnect_attempts: u32,
+    /// 是否显示重连消息
+    pub show_reconnect_messages: bool,
+    /// 最大静默失败次数（超过此次数后开始显示重连消息）
+    pub max_silent_failures: u32,
+}
+
+impl Default for ReconnectionConfig {
+    fn default() -> Self {
+        Self {
+            enable_auto_reconnect: true,
+            reconnect_interval_ms: 2000,
+            max_reconnect_attempts: 0, // 无限制
+            show_reconnect_messages: true,
+            max_silent_failures: 5,
+        }
+    }
 }
 
 #[cfg(test)]

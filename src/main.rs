@@ -4,11 +4,13 @@ use std::{thread, time};
 
 // 模块导入
 mod config;
+mod connection_manager;
 mod error;
 mod hid;
 mod input_handler;
 
 use config::{ButtonMappingConfig, ControllerConfig};
+use connection_manager::ConnectionManager;
 use error::{ControllerError, ControllerResult, ErrorContext, RecoveryStrategy};
 use hid::HidController;
 use input_handler::InputHandler;
@@ -165,47 +167,90 @@ fn load_configuration() -> ControllerResult<(ControllerConfig, ButtonMappingConf
     Ok((config, button_mapping))
 }
 
-/// 主控制循环
-fn run_control_loop(
-    controller: HidController,
+/// 主控制循环（支持自动重连）
+fn run_control_loop_with_reconnect(
+    mut connection_manager: ConnectionManager,
     mut input_handler: InputHandler,
     scroll_power: Arc<Mutex<f64>>,
     config: &ControllerConfig,
+    button_mapping: &ButtonMappingConfig,
 ) -> ControllerResult<()> {
+    let mut current_controller: Option<HidController> = None;
     let mut retry_count = 0;
     const MAX_RETRIES: u32 = 5;
 
-    loop {
-        match controller.read_state(config.analog_trigger_threshold) {
-            Ok(Some(state)) => {
-                retry_count = 0; // 重置重试计数
+    // 尝试初始连接
+    match connection_manager.initial_connect() {
+        Ok(controller) => {
+            current_controller = Some(controller);
+            print_instructions(button_mapping);
+        }
+        Err(e) => {
+            if !connection_manager.should_continue() {
+                return Err(e);
+            }
+            println!("初始连接失败，开始等待设备连接...");
+        }
+    }
 
-                // 处理输入
-                if let Err(e) = input_handler.handle_input(&state, &scroll_power) {
-                    if handle_error_with_recovery(e) {
-                        return Err(ControllerError::InitializationFailed(
-                            "用户选择退出".to_string(),
-                        ));
+    loop {
+        // 检查是否应该继续运行
+        if !connection_manager.should_continue() {
+            break;
+        }
+
+        // 如果没有控制器，尝试重连
+        if current_controller.is_none() {
+            if let Some(reconnect_result) = connection_manager.try_reconnect() {
+                match reconnect_result {
+                    Ok(controller) => {
+                        current_controller = Some(controller);
+                        retry_count = 0;
+                        print_instructions(button_mapping);
+                        continue;
+                    }
+                    Err(_) => {
+                        connection_manager.wait_reconnect_interval();
+                        continue;
                     }
                 }
+            } else {
+                // 重连被禁用或达到最大重试次数
+                break;
             }
-            Ok(None) => continue, // 没有新数据，继续下一次循环
-            Err(e) => {
-                retry_count += 1;
+        }
 
-                if retry_count >= MAX_RETRIES {
-                    return Err(ControllerError::DeviceDisconnected);
+        // 有控制器时，尝试读取状态
+        if let Some(controller) = &current_controller {
+            match controller.read_state(config.analog_trigger_threshold) {
+                Ok(Some(state)) => {
+                    retry_count = 0;
+
+                    // 处理输入
+                    if let Err(e) = input_handler.handle_input(&state, &scroll_power) {
+                        if handle_error_with_recovery(e) {
+                            return Err(ControllerError::InitializationFailed(
+                                "用户选择退出".to_string(),
+                            ));
+                        }
+                    }
                 }
+                Ok(None) => continue, // 没有新数据，继续下一次循环
+                Err(_) => {
+                    retry_count += 1;
 
-                let controller_error = ControllerError::HidDevice(e.to_string());
-                if handle_error_with_recovery(controller_error) {
-                    return Err(ControllerError::InitializationFailed(
-                        "用户选择退出".to_string(),
-                    ));
+                    if retry_count >= MAX_RETRIES {
+                        // 设备断开
+                        connection_manager.handle_disconnect();
+                        current_controller = None;
+                        retry_count = 0;
+                    }
                 }
             }
         }
     }
+
+    Ok(())
 }
 
 fn main() {
@@ -229,7 +274,10 @@ fn main() {
 
     println!("正在搜索 {}...", HidController::get_device_info());
 
-    // 2. 初始化输入处理器
+    // 2. 初始化连接管理器
+    let connection_manager = ConnectionManager::new(&config);
+
+    // 3. 初始化输入处理器
     let input_handler = match InputHandler::new(config.clone(), button_mapping.clone()) {
         Ok(handler) => handler,
         Err(e) => {
@@ -240,25 +288,20 @@ fn main() {
 
     println!("{}", "-".repeat(40));
 
-    // 3. 初始化 HID 控制器
-    let controller = match HidController::new() {
-        Ok(ctrl) => ctrl,
-        Err(e) => {
-            handle_error_with_recovery(e);
-            return;
-        }
-    };
-
-    print_instructions(&button_mapping);
-
     // 4. 启动滚动步调器线程
     let scroll_power = Arc::new(Mutex::new(0.0));
     let pacer_power = Arc::clone(&scroll_power);
     let pacer_config = config.clone();
     thread::spawn(move || run_pacer_loop(pacer_power, pacer_config));
 
-    // 5. 运行主控制循环
-    if let Err(e) = run_control_loop(controller, input_handler, scroll_power, &config) {
+    // 5. 运行主控制循环（支持自动重连）
+    if let Err(e) = run_control_loop_with_reconnect(
+        connection_manager,
+        input_handler,
+        scroll_power,
+        &config,
+        &button_mapping,
+    ) {
         handle_error_with_recovery(e);
     }
 

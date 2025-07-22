@@ -94,3 +94,62 @@ pacer_loop_hz = 75
 
 # 问题：滚动卡顿
 # 解决：增加 pacer_loop_hz 值
+
+# === 重连配置 ===
+
+[reconnection]
+# 是否启用自动重连 (true/false)
+# 当手柄断开连接时，程序是否自动等待并尝试重新连接
+enable_auto_reconnect = true
+
+# 重连尝试间隔 (毫秒)
+# 每次重连尝试之间的等待时间
+reconnect_interval_ms = 2000
+
+# 最大重连尝试次数 (0表示无限制)
+# 超过此次数后停止重连尝试，0表示永不停止
+max_reconnect_attempts = 0
+
+# 是否显示重连消息 (true/false)
+# 控制是否在控制台显示重连状态信息
+show_reconnect_messages = true
+
+# 最大静默失败次数
+# 超过此次数的连续失败后开始显示重连消息
+# 用于减少控制台输出的频率
+max_silent_failures = 5
+
+# === 重连配置说明 ===
+
+# 1. 自动重连功能：
+#    - 当手柄休眠或断开连接时，程序不会退出
+#    - 程序会定期尝试重新连接手柄
+#    - 手柄重新连接后可以立即继续使用
+
+# 2. 重连策略：
+#    - enable_auto_reconnect = false：禁用自动重连，断开后程序退出
+#    - max_reconnect_attempts = 0：无限重连，永不放弃
+#    - max_reconnect_attempts > 0：达到次数后停止重连
+
+# 3. 消息控制：
+#    - show_reconnect_messages = false：静默重连，不显示任何消息
+#    - max_silent_failures：控制消息显示频率，避免刷屏
+
+# 4. 使用建议：
+#    - 观看视频时：建议启用自动重连，设置较长的重连间隔
+#    - 游戏使用时：可以设置较短的重连间隔以快速恢复
+#    - 电池管理：手柄休眠是正常的节电行为，无需担心
+
+# === 重连故障排除 ===
+
+# 问题：手柄断开后程序立即退出
+# 解决：检查 enable_auto_reconnect 是否为 true
+
+# 问题：重连消息太频繁
+# 解决：增加 max_silent_failures 或设置 show_reconnect_messages = false
+
+# 问题：重连尝试太频繁影响系统性能
+# 解决：增加 reconnect_interval_ms 的值
+
+# 问题：重连失败次数过多想要停止
+# 解决：设置合适的 max_reconnect_attempts 值

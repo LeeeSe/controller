@@ -251,15 +251,16 @@ impl InputHandler {
             *power = current_scroll_power;
         }
 
-        // 导航（X轴优先）
+        // 导航（X轴优先）- 使用规范化的rx值避免不对称性问题
+        let normalized_rx = state.normalized_rx();
         if rx_abs > self.config.nav_trigger_threshold
             && (rx_abs as f64 > ry_abs as f64 * self.config.dominant_axis_factor)
         {
-            if state.rx > 0 && !self.nav_flags.1 {
+            if normalized_rx > 0 && !self.nav_flags.1 {
                 // 前进：Cmd + ]
                 self.execute_shortcut(&[Key::Meta], Key::Unicode(']'))?;
                 self.nav_flags.1 = true;
-            } else if state.rx < 0 && !self.nav_flags.0 {
+            } else if normalized_rx < 0 && !self.nav_flags.0 {
                 // 后退：Cmd + [
                 self.execute_shortcut(&[Key::Meta], Key::Unicode('['))?;
                 self.nav_flags.0 = true;
@@ -267,7 +268,7 @@ impl InputHandler {
         }
 
         // 重置导航标志以防止连续触发
-        if state.rx.abs() < self.config.nav_trigger_threshold {
+        if normalized_rx.abs() < self.config.nav_trigger_threshold {
             self.nav_flags.1 = false;
             self.nav_flags.0 = false;
         }
