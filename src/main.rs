@@ -1,62 +1,61 @@
-use enigo::{
-    Axis, Button as EnigoButton, Coordinate,
-    Direction::{Click, Press, Release},
-    Enigo, Key, Keyboard, Mouse, Settings,
-};
-use std::collections::HashSet;
+use enigo::{Axis, Enigo, Mouse, Settings};
 use std::sync::{Arc, Mutex};
 use std::{thread, time};
 
-// hid 和 mouse_position 模块假设在其他文件中，如原始结构所示。
+// 模块导入
+mod config;
+mod error;
 mod hid;
-use hid::{
-    BUTTON_A, BUTTON_B, BUTTON_LB, BUTTON_RB, BUTTON_X, BUTTON_Y, ControllerState, HidController,
-};
+mod input_handler;
 
-// --- 应用程序配置和阈值 ---
-const ANALOG_TRIGGER_THRESHOLD: u8 = 20;
-const JOYSTICK_DEADZONE: i16 = 1000;
-const RIGHT_JOYSTICK_DEADZONE: i16 = 5000;
-const GYRO_DEADZONE: i16 = 10;
-const NAV_TRIGGER_THRESHOLD: i16 = 32001; // 页面导航的触发阈值
-const DOMINANT_AXIS_FACTOR: f64 = 1.5;
+use config::{ButtonMappingConfig, ControllerConfig};
+use error::{ControllerError, ControllerResult, ErrorContext, RecoveryStrategy};
+use hid::HidController;
+use input_handler::InputHandler;
 
-const JOYSTICK_SENSITIVITY: f64 = 15.0;
-const GYRO_SENSITIVITY: f64 = 0.08;
-const DIRECT_SCROLL_SENSITIVITY: f64 = 20.0;
-const PACER_LOOP_HZ: u64 = 75;
+/// 滚动处理器，使用独立的 Enigo 实例
+struct ScrollHandler {
+    enigo: Enigo,
+}
 
-/// 应用死区和二次加速曲线
-fn apply_deadzone_and_curve(value: i16, deadzone: i16) -> f64 {
-    let val_f = value as f64;
-    let deadzone_f = deadzone as f64;
-    if val_f.abs() < deadzone_f {
-        return 0.0;
+impl ScrollHandler {
+    fn new() -> ControllerResult<Self> {
+        let enigo = Enigo::new(&Settings::default()).map_err(|e| {
+            ControllerError::InitializationFailed(format!("滚动处理器Enigo初始化失败: {}", e))
+        })?;
+        Ok(Self { enigo })
     }
-
-    let max_val = i16::MAX as f64;
-    let normalized_val = (val_f.abs() - deadzone_f) / (max_val - deadzone_f);
-    normalized_val.powi(2).copysign(val_f)
 }
 
 /// "步调器"线程用于发送平滑滚动事件
-fn run_pacer_loop(scroll_power: Arc<Mutex<f64>>) {
-    // 每个需要发送输入的线程都需要自己的 Enigo 实例。
-    let mut enigo = match Enigo::new(&Settings::default()) {
-        Ok(enigo) => enigo,
+fn run_pacer_loop(scroll_power: Arc<Mutex<f64>>, config: ControllerConfig) {
+    let mut scroll_handler = match ScrollHandler::new() {
+        Ok(handler) => handler,
         Err(e) => {
-            eprintln!("在步调器线程中初始化 Enigo 时出错: {}", e);
+            eprintln!("在步调器线程中初始化滚动处理器时出错: {}", e);
             return;
         }
     };
-    let loop_interval = time::Duration::from_secs_f64(1.0 / PACER_LOOP_HZ as f64);
+
+    let loop_interval = time::Duration::from_secs_f64(1.0 / config.pacer_loop_hz as f64);
+
     loop {
-        let power = *scroll_power.lock().unwrap();
+        let power = match scroll_power.lock() {
+            Ok(guard) => *guard,
+            Err(_) => {
+                eprintln!("无法获取滚动力度锁");
+                continue;
+            }
+        };
+
         if power.abs() > 0.01 {
             let scroll_delta = power.round() as i32;
             if scroll_delta != 0 {
                 // 正值向下滚动，负值向上滚动
-                if let Err(e) = enigo.scroll(-1 * scroll_delta, Axis::Vertical) {
+                if let Err(e) = scroll_handler
+                    .enigo
+                    .scroll(-1 * scroll_delta, Axis::Vertical)
+                {
                     eprintln!("滚动时出错: {}", e);
                 }
             }
@@ -66,206 +65,202 @@ fn run_pacer_loop(scroll_power: Arc<Mutex<f64>>) {
 }
 
 /// 打印操作说明
-fn print_instructions() {
+fn print_instructions(button_mapping: &ButtonMappingConfig) {
     println!("设备已连接！控制器现在可以控制鼠标了。");
     println!(" - 左摇杆：移动光标");
     println!(" - 右摇杆上/下：滚动页面（平滑且松开时停止）");
     println!(" - 右摇杆左/右：导航前进/后退（在浏览器等应用中）");
     println!(" - 按住LT + 移动控制器：陀螺仪瞄准");
-    println!(" - A/B 按钮：左/右鼠标点击");
-    println!(" - LB/RB 按钮：切换标签页");
-    println!(" - X 按钮：关闭窗口 (Cmd+W)");
-    println!(" - Y 按钮：调度中心");
+
+    println!(
+        " - A 按钮：{}",
+        format_button_action(&button_mapping.button_a)
+    );
+    println!(
+        " - B 按钮：{}",
+        format_button_action(&button_mapping.button_b)
+    );
+    println!(
+        " - X 按钮：{}",
+        format_button_action(&button_mapping.button_x)
+    );
+    println!(
+        " - Y 按钮：{}",
+        format_button_action(&button_mapping.button_y)
+    );
+    println!(
+        " - LB 按钮：{}",
+        format_button_action(&button_mapping.button_lb)
+    );
+    println!(
+        " - RB 按钮：{}",
+        format_button_action(&button_mapping.button_rb)
+    );
+
     println!("按 Ctrl+C 退出程序。");
     println!("{}", "-".repeat(40));
 }
 
-/// 使用 Enigo 处理按钮按下和释放事件
-fn handle_button_events(
-    enigo: &mut Enigo,
-    newly_pressed: &HashSet<u8>,
-    newly_released: &HashSet<u8>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    for &button in newly_pressed {
-        match button {
-            BUTTON_A => enigo.button(EnigoButton::Left, Press)?,
-            BUTTON_B => enigo.button(EnigoButton::Right, Press)?,
-            BUTTON_X => {
-                // 关闭窗口 (Cmd+W)
-                enigo.key(Key::Meta, Press)?;
-                enigo.key(Key::Unicode('w'), Click)?;
-                enigo.key(Key::Meta, Release)?;
-            }
-            BUTTON_Y => {
-                // 调度中心
-                enigo.key(Key::MissionControl, Click)?;
-            }
-            BUTTON_LB => {
-                // 上一个标签页 (Cmd+Shift+[)
-                enigo.key(Key::Meta, Press)?;
-                enigo.key(Key::Shift, Press)?;
-                enigo.key(Key::Unicode('['), Click)?;
-                enigo.key(Key::Shift, Release)?;
-                enigo.key(Key::Meta, Release)?;
-            }
-            BUTTON_RB => {
-                // 下一个标签页 (Cmd+Shift+])
-                enigo.key(Key::Meta, Press)?;
-                enigo.key(Key::Shift, Press)?;
-                enigo.key(Key::Unicode(']'), Click)?;
-                enigo.key(Key::Shift, Release)?;
-                enigo.key(Key::Meta, Release)?;
-            }
-            _ => (),
+/// 格式化按钮动作描述
+fn format_button_action(action: &config::ButtonAction) -> String {
+    match action {
+        config::ButtonAction::LeftClick => "左鼠标点击".to_string(),
+        config::ButtonAction::RightClick => "右鼠标点击".to_string(),
+        config::ButtonAction::CloseWindow => "关闭窗口 (Cmd+W)".to_string(),
+        config::ButtonAction::MissionControl => "调度中心".to_string(),
+        config::ButtonAction::PrevTab => "上一个标签页".to_string(),
+        config::ButtonAction::NextTab => "下一个标签页".to_string(),
+        config::ButtonAction::CustomShortcut { modifiers, key } => {
+            format!("自定义快捷键: {}+{}", modifiers.join("+"), key)
         }
+        config::ButtonAction::None => "无操作".to_string(),
     }
-
-    for &button in newly_released {
-        match button {
-            BUTTON_A => enigo.button(EnigoButton::Left, Release)?,
-            BUTTON_B => enigo.button(EnigoButton::Right, Release)?,
-            _ => (),
-        }
-    }
-    Ok(())
 }
 
-/// 计算鼠标（光标）移动增量
-fn handle_mouse_movement(state: &ControllerState) -> (f64, f64) {
-    let mut delta_x = 0.0;
-    let mut delta_y = 0.0;
+/// 处理错误并根据恢复策略执行相应操作
+fn handle_error_with_recovery(error: ControllerError) -> bool {
+    let recovery_strategy = ErrorContext::suggest_recovery_strategy(&error);
+    let context = ErrorContext::new(error, recovery_strategy);
 
-    // 左摇杆
-    delta_x += apply_deadzone_and_curve(state.lx, JOYSTICK_DEADZONE) * JOYSTICK_SENSITIVITY;
-    delta_y += apply_deadzone_and_curve(state.ly, JOYSTICK_DEADZONE) * JOYSTICK_SENSITIVITY;
+    eprintln!("错误: {}", context.error);
+    println!("建议: {}", context.user_message);
 
-    // 陀螺仪（仅当按住LT时）
-    if state.lt > ANALOG_TRIGGER_THRESHOLD {
-        if state.gyro_yaw.abs() > GYRO_DEADZONE {
-            delta_x += state.gyro_yaw as f64 * GYRO_SENSITIVITY;
+    match &context.recovery_strategy {
+        RecoveryStrategy::Retry {
+            max_attempts,
+            delay_ms,
+        } => {
+            println!("将在 {}ms 后重试，最多重试 {} 次", delay_ms, max_attempts);
+            thread::sleep(time::Duration::from_millis(*delay_ms));
+            false // 继续运行
         }
-        if state.gyro_pitch.abs() > GYRO_DEADZONE {
-            delta_y += state.gyro_pitch as f64 * GYRO_SENSITIVITY;
+        RecoveryStrategy::Reconnect => {
+            println!("正在尝试重新连接设备...");
+            thread::sleep(time::Duration::from_millis(1000));
+            false // 继续运行
+        }
+        RecoveryStrategy::Skip => {
+            println!("跳过当前操作，继续运行...");
+            false // 继续运行
+        }
+        RecoveryStrategy::Exit => {
+            println!("程序将退出。");
+            true // 退出程序
         }
     }
-
-    (delta_x, delta_y)
 }
 
-/// 处理右摇杆滚动和导航功能
-fn handle_right_stick(
-    enigo: &mut Enigo,
-    state: &ControllerState,
-    scroll_power: &Arc<Mutex<f64>>,
-    nav_flags: &mut (bool, bool),
-) -> Result<(), Box<dyn std::error::Error>> {
-    let (nav_triggered_left, nav_triggered_right) = nav_flags;
-    let (rx_abs, ry_abs) = (state.rx.abs(), state.ry.abs());
+/// 加载配置文件
+fn load_configuration() -> ControllerResult<(ControllerConfig, ButtonMappingConfig)> {
+    let config_path =
+        ControllerConfig::default_config_path().map_err(|e| ControllerError::Config(e))?;
 
-    // 滚动（Y轴优先）
-    let mut current_scroll_power = 0.0;
-    if ry_abs > RIGHT_JOYSTICK_DEADZONE && (ry_abs as f64 > rx_abs as f64 * DOMINANT_AXIS_FACTOR) {
-        let normalized_ry = apply_deadzone_and_curve(state.ry, RIGHT_JOYSTICK_DEADZONE);
-        // 反向以实现自然滚动方向
-        current_scroll_power = -normalized_ry * DIRECT_SCROLL_SENSITIVITY;
-    }
-    *scroll_power.lock().unwrap() = current_scroll_power;
+    let config = ControllerConfig::load_or_create_default(&config_path)
+        .map_err(|e| ControllerError::Config(e))?;
 
-    // 导航（X轴优先）
-    if rx_abs > NAV_TRIGGER_THRESHOLD && (rx_abs as f64 > ry_abs as f64 * DOMINANT_AXIS_FACTOR) {
-        if state.rx > 0 && !*nav_triggered_right {
-            // 前进：Cmd + ]
-            enigo.key(Key::Meta, Press)?;
-            enigo.key(Key::Unicode(']'), Click)?;
-            enigo.key(Key::Meta, Release)?;
-            *nav_triggered_right = true;
-        } else if state.rx < 0 && !*nav_triggered_left {
-            // 后退：Cmd + [
-            enigo.key(Key::Meta, Press)?;
-            enigo.key(Key::Unicode('['), Click)?;
-            enigo.key(Key::Meta, Release)?;
-            *nav_triggered_left = true;
-        }
-    }
+    config.validate().map_err(|e| ControllerError::Config(e))?;
 
-    // 重置导航标志以防止连续触发
-    if state.rx.abs() < NAV_TRIGGER_THRESHOLD {
-        *nav_triggered_right = false;
-        *nav_triggered_left = false;
-    }
-    Ok(())
+    let button_mapping = ButtonMappingConfig::default();
+
+    Ok((config, button_mapping))
 }
 
 /// 主控制循环
-fn run_control_loop(controller: HidController, enigo: &mut Enigo, scroll_power: Arc<Mutex<f64>>) {
-    let mut last_buttons = HashSet::new();
-    let mut nav_flags = (false, false); // (左触发, 右触发)
+fn run_control_loop(
+    controller: HidController,
+    mut input_handler: InputHandler,
+    scroll_power: Arc<Mutex<f64>>,
+    config: &ControllerConfig,
+) -> ControllerResult<()> {
+    let mut retry_count = 0;
+    const MAX_RETRIES: u32 = 5;
 
     loop {
-        match controller.read_state(ANALOG_TRIGGER_THRESHOLD) {
+        match controller.read_state(config.analog_trigger_threshold) {
             Ok(Some(state)) => {
-                // 1. 处理按钮事件
-                let newly_pressed = &state.pressed_buttons - &last_buttons;
-                let newly_released = &last_buttons - &state.pressed_buttons;
-                if !newly_pressed.is_empty() || !newly_released.is_empty() {
-                    if let Err(e) = handle_button_events(enigo, &newly_pressed, &newly_released) {
-                        eprintln!("处理按钮事件时出错: {}", e);
-                    }
-                }
-                last_buttons = state.pressed_buttons.clone();
+                retry_count = 0; // 重置重试计数
 
-                // 2. 处理光标移动（摇杆 + 陀螺仪）
-                let (dx, dy) = handle_mouse_movement(&state);
-                if dx.abs() >= 0.01 || dy.abs() >= 0.01 {
-                    if let Err(e) = enigo.move_mouse(dx as i32, dy as i32, Coordinate::Rel) {
-                        eprintln!("移动鼠标时出错: {}", e);
+                // 处理输入
+                if let Err(e) = input_handler.handle_input(&state, &scroll_power) {
+                    if handle_error_with_recovery(e) {
+                        return Err(ControllerError::InitializationFailed(
+                            "用户选择退出".to_string(),
+                        ));
                     }
-                }
-
-                // 3. 处理右摇杆（滚动 + 导航）
-                if let Err(e) = handle_right_stick(enigo, &state, &scroll_power, &mut nav_flags) {
-                    eprintln!("处理右摇杆时出错: {}", e);
                 }
             }
             Ok(None) => continue, // 没有新数据，继续下一次循环
             Err(e) => {
-                eprintln!("{}。程序将退出。", e);
-                break;
+                retry_count += 1;
+
+                if retry_count >= MAX_RETRIES {
+                    return Err(ControllerError::DeviceDisconnected);
+                }
+
+                let controller_error = ControllerError::HidDevice(e.to_string());
+                if handle_error_with_recovery(controller_error) {
+                    return Err(ControllerError::InitializationFailed(
+                        "用户选择退出".to_string(),
+                    ));
+                }
             }
         }
     }
 }
 
 fn main() {
+    println!("正在启动Xbox手柄控制器应用程序...");
+
+    // 1. 加载配置
+    let (config, button_mapping) = match load_configuration() {
+        Ok((config, button_mapping)) => {
+            println!("配置加载成功");
+            (config, button_mapping)
+        }
+        Err(e) => {
+            if handle_error_with_recovery(e) {
+                return;
+            }
+            // 使用默认配置继续
+            println!("使用默认配置继续运行");
+            (ControllerConfig::default(), ButtonMappingConfig::default())
+        }
+    };
+
     println!("正在搜索 {}...", HidController::get_device_info());
 
-    // 在主线程初始化 Enigo 用于输入模拟
-    let mut enigo = match Enigo::new(&Settings::default()) {
-        Ok(enigo) => enigo,
+    // 2. 初始化输入处理器
+    let input_handler = match InputHandler::new(config.clone(), button_mapping.clone()) {
+        Ok(handler) => handler,
         Err(e) => {
-            eprintln!("初始化 Enigo 时出错: {}。程序将退出。", e);
+            handle_error_with_recovery(e);
             return;
         }
     };
 
     println!("{}", "-".repeat(40));
 
-    // 初始化 HID 控制器
+    // 3. 初始化 HID 控制器
     let controller = match HidController::new() {
         Ok(ctrl) => ctrl,
         Err(e) => {
-            eprintln!("错误: {}", e);
+            handle_error_with_recovery(e);
             return;
         }
     };
 
-    print_instructions();
+    print_instructions(&button_mapping);
 
-    // 启动滚动步调器线程
+    // 4. 启动滚动步调器线程
     let scroll_power = Arc::new(Mutex::new(0.0));
     let pacer_power = Arc::clone(&scroll_power);
-    thread::spawn(move || run_pacer_loop(pacer_power));
+    let pacer_config = config.clone();
+    thread::spawn(move || run_pacer_loop(pacer_power, pacer_config));
 
-    // 运行主控制循环
-    run_control_loop(controller, &mut enigo, scroll_power);
+    // 5. 运行主控制循环
+    if let Err(e) = run_control_loop(controller, input_handler, scroll_power, &config) {
+        handle_error_with_recovery(e);
+    }
+
+    println!("应用程序已退出。");
 }

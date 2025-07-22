@@ -1,3 +1,4 @@
+use crate::error::{ControllerError, ControllerResult};
 use hidapi::{HidApi, HidDevice};
 use std::collections::HashSet;
 
@@ -105,11 +106,11 @@ pub struct HidController {
 
 impl HidController {
     /// 查找并连接到目标HID设备
-    pub fn new() -> Result<Self, String> {
-        let api = HidApi::new().map_err(|e| format!("HidApi 初始化失败: {}", e))?;
+    pub fn new() -> ControllerResult<Self> {
+        let api = HidApi::new()
+            .map_err(|e| ControllerError::HidDevice(format!("HidApi 初始化失败: {}", e)))?;
 
-        let device = Self::find_and_open_device(&api)
-            .ok_or_else(|| "未找到匹配的HID设备。请检查VID/PID或设备连接。".to_string())?;
+        let device = Self::find_and_open_device(&api).ok_or(ControllerError::DeviceNotFound)?;
 
         Ok(Self { device })
     }
@@ -138,7 +139,7 @@ impl HidController {
     pub fn read_state(
         &self,
         analog_trigger_threshold: u8,
-    ) -> Result<Option<ControllerState>, String> {
+    ) -> ControllerResult<Option<ControllerState>> {
         let mut buf = [0u8; 64];
 
         match self.device.read_timeout(&mut buf, 10) {
@@ -147,7 +148,7 @@ impl HidController {
                 let state = ControllerState::from_buffer(&buf, analog_trigger_threshold);
                 Ok(Some(state))
             }
-            Err(e) => Err(format!("读取设备时出错: {}", e)),
+            Err(e) => Err(ControllerError::HidDevice(format!("读取设备时出错: {}", e))),
         }
     }
 
