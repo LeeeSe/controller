@@ -176,11 +176,6 @@ impl InputHandler {
     }
 
     /// 解析键名字符串为 Key 枚举
-    fn parse_key_string(&self, key_str: &str) -> ControllerResult<Key> {
-        Self::parse_key_string_static(key_str)
-    }
-
-    /// 静态版本的解析键名字符串为 Key 枚举
     fn parse_key_string_static(key_str: &str) -> ControllerResult<Key> {
         match key_str.to_lowercase().as_str() {
             "cmd" | "meta" => Ok(Key::Meta),
@@ -293,34 +288,12 @@ impl InputHandler {
         let normalized_val = (val_f.abs() - deadzone_f) / (max_val - deadzone_f);
         normalized_val.powi(2).copysign(val_f)
     }
-
-    /// 更新配置
-    pub fn update_config(&mut self, config: ControllerConfig) {
-        self.config = config;
-    }
-
-    /// 更新按钮映射
-    pub fn update_button_mapping(&mut self, button_mapping: ButtonMappingConfig) {
-        self.button_mapping = button_mapping;
-    }
-
-    /// 获取当前配置的只读引用
-    pub fn config(&self) -> &ControllerConfig {
-        &self.config
-    }
-
-    /// 获取当前按钮映射的只读引用
-    pub fn button_mapping(&self) -> &ButtonMappingConfig {
-        &self.button_mapping
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::ControllerConfig;
-    use crate::hid::ControllerState;
-    use std::collections::HashSet;
 
     fn create_test_input_handler() -> InputHandler {
         let config = ControllerConfig::default();
@@ -329,19 +302,6 @@ mod tests {
         // 对于测试，我们需要模拟 Enigo 的创建
         // 这里可能需要使用 mock 或者跳过需要系统权限的测试
         InputHandler::new(config, button_mapping).unwrap()
-    }
-
-    fn create_test_state() -> ControllerState {
-        ControllerState {
-            lx: 0,
-            ly: 0,
-            rx: 0,
-            ry: 0,
-            lt: 0,
-            gyro_yaw: 0,
-            gyro_pitch: 0,
-            pressed_buttons: HashSet::new(),
-        }
     }
 
     #[test]
@@ -362,8 +322,6 @@ mod tests {
 
     #[test]
     fn test_parse_key_string() {
-        let _handler = create_test_input_handler();
-
         assert!(matches!(
             InputHandler::parse_key_string_static("cmd"),
             Ok(Key::Meta)
@@ -377,15 +335,5 @@ mod tests {
             Ok(Key::Unicode('a'))
         ));
         assert!(InputHandler::parse_key_string_static("invalid_key").is_err());
-    }
-
-    #[test]
-    fn test_config_update() {
-        let mut handler = create_test_input_handler();
-        let mut new_config = ControllerConfig::default();
-        new_config.joystick_sensitivity = 25.0;
-
-        handler.update_config(new_config.clone());
-        assert_eq!(handler.config().joystick_sensitivity, 25.0);
     }
 }

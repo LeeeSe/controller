@@ -4,7 +4,15 @@ use std::collections::HashSet;
 
 // --- HID设备标识 ---
 pub const TARGET_VENDOR_ID: u16 = 0x045E;
-pub const TARGET_PRODUCT_ID: u16 = 0x028E;
+
+// 支持的Xbox手柄产品ID列表
+pub const SUPPORTED_PRODUCT_IDS: &[u16] = &[
+    0x028E, // Xbox 360 Controller (有线)
+    0x02E0, // Xbox Wireless Controller (蓝牙)
+    0x02FD, // Xbox One Controller (有线)
+    0x02EA, // Xbox One Controller (蓝牙)
+    0x0719, // Xbox 360 Wireless Receiver
+];
 
 // --- 按钮掩码定义 ---
 pub const BUTTON_LB: u8 = 0x01;
@@ -117,22 +125,25 @@ impl HidController {
 
     /// 查找并打开目标 HID 设备
     fn find_and_open_device(api: &HidApi) -> Option<HidDevice> {
-        let dev_info = api
-            .device_list()
-            .find(|d| d.vendor_id() == TARGET_VENDOR_ID && d.product_id() == TARGET_PRODUCT_ID)?;
+        // 搜索所有支持的产品ID
+        for &product_id in SUPPORTED_PRODUCT_IDS {
+            if let Some(dev_info) = api
+                .device_list()
+                .find(|d| d.vendor_id() == TARGET_VENDOR_ID && d.product_id() == product_id)
+            {
+                let device_name = dev_info.product_string().unwrap_or("未知设备");
+                println!("找到设备: {} (PID: {:#06X})", device_name, product_id);
 
-        println!(
-            "找到设备: {}",
-            dev_info.product_string().unwrap_or("未知设备")
-        );
-
-        match dev_info.open_device(api) {
-            Ok(device) => Some(device),
-            Err(e) => {
-                eprintln!("无法打开设备: {}", e);
-                None
+                match dev_info.open_device(api) {
+                    Ok(device) => return Some(device),
+                    Err(e) => {
+                        eprintln!("无法打开设备 {}: {}", device_name, e);
+                        continue;
+                    }
+                }
             }
         }
+        None
     }
 
     /// 读取HID设备数据并解析为控制器状态
@@ -154,9 +165,15 @@ impl HidController {
 
     /// 获取设备信息字符串
     pub fn get_device_info() -> String {
+        let pids: Vec<String> = SUPPORTED_PRODUCT_IDS
+            .iter()
+            .map(|&pid| format!("{:#06X}", pid))
+            .collect();
+
         format!(
-            "手柄设备 (VID: {:#06X}, PID: {:#06X})",
-            TARGET_VENDOR_ID, TARGET_PRODUCT_ID
+            "Xbox手柄设备 (VID: {:#06X}, 支持的PID: {})",
+            TARGET_VENDOR_ID,
+            pids.join(", ")
         )
     }
 }
