@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -27,6 +28,8 @@ pub struct ControllerConfig {
     pub pacer_loop_hz: u64,
     /// 重连配置
     pub reconnection: ReconnectionConfig,
+    /// 按键绑定配置
+    pub button_mappings: HashMap<String, ButtonAction>,
 }
 
 impl Default for ControllerConfig {
@@ -43,11 +46,34 @@ impl Default for ControllerConfig {
             direct_scroll_sensitivity: 20.0,
             pacer_loop_hz: 75,
             reconnection: ReconnectionConfig::default(),
+            button_mappings: Self::default_button_mappings(),
         }
     }
 }
 
 impl ControllerConfig {
+    /// 创建默认按键绑定配置
+    fn default_button_mappings() -> HashMap<String, ButtonAction> {
+        let mut mappings = HashMap::new();
+        
+        // 单独按键
+        mappings.insert("A".to_string(), ButtonAction::LeftClick);
+        mappings.insert("B".to_string(), ButtonAction::RightClick);
+        mappings.insert("X".to_string(), ButtonAction::CloseWindow);
+        mappings.insert("Y".to_string(), ButtonAction::MissionControl);
+        mappings.insert("LB".to_string(), ButtonAction::PrevTab);
+        mappings.insert("RB".to_string(), ButtonAction::NextTab);
+        mappings.insert("DPad_Up".to_string(), ButtonAction::Refresh);
+        mappings.insert("DPad_Down".to_string(), ButtonAction::None);
+        mappings.insert("DPad_Left".to_string(), ButtonAction::None);
+        mappings.insert("DPad_Right".to_string(), ButtonAction::NewTab);
+        
+        // 组合键
+        mappings.insert("LT+X".to_string(), ButtonAction::QuitApp);
+        
+        mappings
+    }
+
     /// 从文件加载配置，如果文件不存在则创建默认配置文件
     pub fn load_or_create_default<P: AsRef<Path>>(config_path: P) -> Result<Self, String> {
         let path = config_path.as_ref();
@@ -126,50 +152,10 @@ impl ControllerConfig {
             .join("controller")
             .join("config.toml"))
     }
-}
 
-/// 按钮映射配置
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ButtonMappingConfig {
-    /// A键功能
-    pub button_a: ButtonAction,
-    /// B键功能
-    pub button_b: ButtonAction,
-    /// X键功能
-    pub button_x: ButtonAction,
-    /// Y键功能
-    pub button_y: ButtonAction,
-    /// LB键功能
-    pub button_lb: ButtonAction,
-    /// RB键功能
-    pub button_rb: ButtonAction,
-    /// 上方向键功能
-    pub dpad_up: ButtonAction,
-    /// 下方向键功能
-    pub dpad_down: ButtonAction,
-    /// 左方向键功能
-    pub dpad_left: ButtonAction,
-    /// 右方向键功能
-    pub dpad_right: ButtonAction,
-    /// LT + X 组合键功能
-    pub lt_x_combo: ButtonAction,
-}
-
-impl Default for ButtonMappingConfig {
-    fn default() -> Self {
-        Self {
-            button_a: ButtonAction::LeftClick,
-            button_b: ButtonAction::RightClick,
-            button_x: ButtonAction::CloseWindow,
-            button_y: ButtonAction::MissionControl,
-            button_lb: ButtonAction::PrevTab,
-            button_rb: ButtonAction::NextTab,
-            dpad_up: ButtonAction::Refresh,
-            dpad_down: ButtonAction::None,
-            dpad_left: ButtonAction::None,
-            dpad_right: ButtonAction::NewTab,
-            lt_x_combo: ButtonAction::QuitApp,
-        }
+    /// 获取按键绑定
+    pub fn get_button_action(&self, button_combo: &str) -> Option<&ButtonAction> {
+        self.button_mappings.get(button_combo)
     }
 }
 

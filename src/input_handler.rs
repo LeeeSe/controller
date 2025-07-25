@@ -1,4 +1,4 @@
-use crate::config::{ButtonAction, ButtonMappingConfig, ControllerConfig};
+use crate::config::{ButtonAction, ControllerConfig};
 use crate::error::{ControllerError, ControllerResult};
 use crate::hid::{
     BUTTON_A, BUTTON_B, BUTTON_LB, BUTTON_RB, BUTTON_X, BUTTON_Y, ControllerState, DPAD_DOWN,
@@ -16,7 +16,6 @@ use std::sync::{Arc, Mutex};
 pub struct InputHandler {
     enigo: Enigo,
     config: ControllerConfig,
-    button_mapping: ButtonMappingConfig,
     last_buttons: HashSet<u8>,
     nav_flags: (bool, bool), // (左触发, 右触发)
     screen_width: i32,
@@ -28,7 +27,6 @@ impl InputHandler {
     /// 创建新的输入处理器
     pub fn new(
         config: ControllerConfig,
-        button_mapping: ButtonMappingConfig,
     ) -> ControllerResult<Self> {
         let enigo = Enigo::new(&enigo::Settings::default()).map_err(|e| {
             ControllerError::InitializationFailed(format!("Enigo初始化失败: {}", e))
@@ -42,7 +40,6 @@ impl InputHandler {
         Ok(Self {
             enigo,
             config,
-            button_mapping,
             last_buttons: HashSet::new(),
             nav_flags: (false, false),
             screen_width: screen_width as i32,
@@ -57,7 +54,7 @@ impl InputHandler {
         state: &ControllerState,
         scroll_power: &Arc<Mutex<f64>>,
     ) -> ControllerResult<()> {
-        // 1. 更新LT状态用于组合键检测
+        // 1. 更新扳机状态用于组合键检测
         self.lt_pressed = state.lt > self.config.analog_trigger_threshold;
 
         // 2. 处理按钮事件
@@ -93,34 +90,47 @@ impl InputHandler {
 
     /// 执行按钮动作
     fn execute_button_action(&mut self, button: u8, pressed: bool) -> ControllerResult<()> {
-        // 检查是否是LT + X组合键
-        if button == BUTTON_X && self.lt_pressed && pressed {
-            let action = self.button_mapping.lt_x_combo.clone();
-            self.execute_action(&action, pressed)?;
-            return Ok(());
-        }
-
-        let action = match button {
-            BUTTON_A => self.button_mapping.button_a.clone(),
-            BUTTON_B => self.button_mapping.button_b.clone(),
-            BUTTON_X => {
-                // 如果LT按下，X键被组合键处理，不单独执行
-                if self.lt_pressed {
-                    return Ok(());
+        // 获取按钮名称
+        let button_name = self.get_button_name(button);
+        
+        // 检查是否有组合键
+        let mut tried_combos = Vec::new();
+        
+        // 检查双键组合 (LT + 按键)
+        if self.lt_pressed {
+            let combo = format!("LT+{}", button_name);
+            tried_combos.push(combo.clone());
+            if let Some(action) = self.config.get_button_action(&combo).cloned() {
+                if pressed {
+                    self.execute_action(&action, pressed)?;
                 }
-                self.button_mapping.button_x.clone()
+                return Ok(());
             }
-            BUTTON_Y => self.button_mapping.button_y.clone(),
-            BUTTON_LB => self.button_mapping.button_lb.clone(),
-            BUTTON_RB => self.button_mapping.button_rb.clone(),
-            DPAD_UP => self.button_mapping.dpad_up.clone(),
-            DPAD_DOWN => self.button_mapping.dpad_down.clone(),
-            DPAD_LEFT => self.button_mapping.dpad_left.clone(),
-            DPAD_RIGHT => self.button_mapping.dpad_right.clone(),
-            _ => return Ok(()),
-        };
-
-        self.execute_action(&action, pressed)
+        }
+        
+        // 检查单独按键
+        if let Some(action) = self.config.get_button_action(&button_name).cloned() {
+            self.execute_action(&action, pressed)?;
+        }
+        
+        Ok(())
+    }
+    
+    /// 获取按钮名称
+    fn get_button_name(&self, button: u8) -> String {
+        match button {
+            BUTTON_A => "A".to_string(),
+            BUTTON_B => "B".to_string(),
+            BUTTON_X => "X".to_string(),
+            BUTTON_Y => "Y".to_string(),
+            BUTTON_LB => "LB".to_string(),
+            BUTTON_RB => "RB".to_string(),
+            DPAD_UP => "DPad_Up".to_string(),
+            DPAD_DOWN => "DPad_Down".to_string(),
+            DPAD_LEFT => "DPad_Left".to_string(),
+            DPAD_RIGHT => "DPad_Right".to_string(),
+            _ => format!("Unknown_{}", button),
+        }
     }
 
     /// 执行具体的按键动作
@@ -366,11 +376,10 @@ mod tests {
 
     fn create_test_input_handler() -> InputHandler {
         let config = ControllerConfig::default();
-        let button_mapping = ButtonMappingConfig::default();
 
         // 对于测试，我们需要模拟 Enigo 的创建
         // 这里可能需要使用 mock 或者跳过需要系统权限的测试
-        InputHandler::new(config, button_mapping).unwrap()
+        InputHandler::new(config).unwrap()
     }
 
     #[test]

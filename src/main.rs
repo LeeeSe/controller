@@ -9,7 +9,7 @@ mod error;
 mod hid;
 mod input_handler;
 
-use config::{ButtonMappingConfig, ControllerConfig};
+use config::ControllerConfig;
 use connection_manager::ConnectionManager;
 use error::{ControllerError, ControllerResult, ErrorContext, RecoveryStrategy};
 use hid::HidController;
@@ -67,57 +67,18 @@ fn run_pacer_loop(scroll_power: Arc<Mutex<f64>>, config: ControllerConfig) {
 }
 
 /// 打印操作说明
-fn print_instructions(button_mapping: &ButtonMappingConfig) {
+fn print_instructions(config: &ControllerConfig) {
     println!("设备已连接！控制器现在可以控制鼠标了。");
     println!(" - 左摇杆：移动光标");
     println!(" - 右摇杆上/下：滚动页面（平滑且松开时停止）");
     println!(" - 右摇杆左/右：导航前进/后退（在浏览器等应用中）");
     println!(" - 按住LT + 移动控制器：陀螺仪瞄准");
+    println!();
+    println!("按键绑定：");
 
-    println!(
-        " - A 按钮：{}",
-        format_button_action(&button_mapping.button_a)
-    );
-    println!(
-        " - B 按钮：{}",
-        format_button_action(&button_mapping.button_b)
-    );
-    println!(
-        " - X 按钮：{}",
-        format_button_action(&button_mapping.button_x)
-    );
-    println!(
-        " - Y 按钮：{}",
-        format_button_action(&button_mapping.button_y)
-    );
-    println!(
-        " - LB 按钮：{}",
-        format_button_action(&button_mapping.button_lb)
-    );
-    println!(
-        " - RB 按钮：{}",
-        format_button_action(&button_mapping.button_rb)
-    );
-    println!(
-        " - 上方向键：{}",
-        format_button_action(&button_mapping.dpad_up)
-    );
-    println!(
-        " - 下方向键：{}",
-        format_button_action(&button_mapping.dpad_down)
-    );
-    println!(
-        " - 左方向键：{}",
-        format_button_action(&button_mapping.dpad_left)
-    );
-    println!(
-        " - 右方向键：{}",
-        format_button_action(&button_mapping.dpad_right)
-    );
-    println!(
-        " - LT + X 组合键：{}",
-        format_button_action(&button_mapping.lt_x_combo)
-    );
+    for (combo, action) in &config.button_mappings {
+        println!(" - {}: {}", combo, format_button_action(action));
+    }
 
     println!("按 Ctrl+C 退出程序。");
     println!("{}", "-".repeat(40));
@@ -176,7 +137,7 @@ fn handle_error_with_recovery(error: ControllerError) -> bool {
 }
 
 /// 加载配置文件
-fn load_configuration() -> ControllerResult<(ControllerConfig, ButtonMappingConfig)> {
+fn load_configuration() -> ControllerResult<ControllerConfig> {
     let config_path =
         ControllerConfig::default_config_path().map_err(|e| ControllerError::Config(e))?;
 
@@ -185,9 +146,7 @@ fn load_configuration() -> ControllerResult<(ControllerConfig, ButtonMappingConf
 
     config.validate().map_err(|e| ControllerError::Config(e))?;
 
-    let button_mapping = ButtonMappingConfig::default();
-
-    Ok((config, button_mapping))
+    Ok(config)
 }
 
 /// 主控制循环（支持自动重连）
@@ -196,7 +155,6 @@ fn run_control_loop_with_reconnect(
     mut input_handler: InputHandler,
     scroll_power: Arc<Mutex<f64>>,
     config: &ControllerConfig,
-    button_mapping: &ButtonMappingConfig,
 ) -> ControllerResult<()> {
     let mut current_controller: Option<HidController> = None;
     let mut retry_count = 0;
@@ -206,7 +164,7 @@ fn run_control_loop_with_reconnect(
     match connection_manager.initial_connect() {
         Ok(controller) => {
             current_controller = Some(controller);
-            print_instructions(button_mapping);
+            print_instructions(config);
         }
         Err(e) => {
             if !connection_manager.should_continue() {
@@ -229,7 +187,7 @@ fn run_control_loop_with_reconnect(
                     Ok(controller) => {
                         current_controller = Some(controller);
                         retry_count = 0;
-                        print_instructions(button_mapping);
+                        print_instructions(config);
                         continue;
                     }
                     Err(_) => {
@@ -280,10 +238,10 @@ fn main() {
     println!("正在启动Xbox手柄控制器应用程序...");
 
     // 1. 加载配置
-    let (config, button_mapping) = match load_configuration() {
-        Ok((config, button_mapping)) => {
+    let config = match load_configuration() {
+        Ok(config) => {
             println!("配置加载成功");
-            (config, button_mapping)
+            config
         }
         Err(e) => {
             if handle_error_with_recovery(e) {
@@ -291,7 +249,7 @@ fn main() {
             }
             // 使用默认配置继续
             println!("使用默认配置继续运行");
-            (ControllerConfig::default(), ButtonMappingConfig::default())
+            ControllerConfig::default()
         }
     };
 
@@ -301,7 +259,7 @@ fn main() {
     let connection_manager = ConnectionManager::new(&config);
 
     // 3. 初始化输入处理器
-    let input_handler = match InputHandler::new(config.clone(), button_mapping.clone()) {
+    let input_handler = match InputHandler::new(config.clone()) {
         Ok(handler) => handler,
         Err(e) => {
             handle_error_with_recovery(e);
@@ -323,7 +281,6 @@ fn main() {
         input_handler,
         scroll_power,
         &config,
-        &button_mapping,
     ) {
         handle_error_with_recovery(e);
     }
