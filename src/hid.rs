@@ -22,7 +22,14 @@ pub const BUTTON_B: u8 = 0x20;
 pub const BUTTON_X: u8 = 0x40;
 pub const BUTTON_Y: u8 = 0x80;
 
+// 方向键按钮掩码定义（偏移量2）- 使用独特的值避免冲突
+pub const DPAD_UP: u8 = 0x01 | 0x80; // 0x81
+pub const DPAD_DOWN: u8 = 0x02 | 0x80; // 0x82
+pub const DPAD_LEFT: u8 = 0x04 | 0x80; // 0x84
+pub const DPAD_RIGHT: u8 = 0x08 | 0x80; // 0x88
+
 // --- HID报告偏移量定义 ---
+const BUTTONS_BYTE_2_OFFSET: usize = 2; // 方向键所在字节
 const BUTTONS_BYTE_3_OFFSET: usize = 3;
 const LT_OFFSET: usize = 4;
 const LX_OFFSET: usize = 6;
@@ -70,8 +77,23 @@ impl ControllerState {
         };
 
         // 解析按钮状态
-        let button_byte_3 = buf[BUTTONS_BYTE_3_OFFSET];
+        let button_byte_2 = buf[BUTTONS_BYTE_2_OFFSET]; // 方向键
+        let button_byte_3 = buf[BUTTONS_BYTE_3_OFFSET]; // 面部按钮和肩部按钮
         let mut pressed_buttons = HashSet::new();
+
+        // 解析方向键 (使用原始掩码值检测)
+        if (button_byte_2 & 0x01) != 0 {
+            pressed_buttons.insert(DPAD_UP);
+        }
+        if (button_byte_2 & 0x02) != 0 {
+            pressed_buttons.insert(DPAD_DOWN);
+        }
+        if (button_byte_2 & 0x04) != 0 {
+            pressed_buttons.insert(DPAD_LEFT);
+        }
+        if (button_byte_2 & 0x08) != 0 {
+            pressed_buttons.insert(DPAD_RIGHT);
+        }
 
         if (button_byte_3 & BUTTON_A) != 0 {
             pressed_buttons.insert(BUTTON_A);
@@ -223,6 +245,12 @@ mod tests {
         assert_eq!(BUTTON_B, 0x20);
         assert_eq!(BUTTON_X, 0x40);
         assert_eq!(BUTTON_Y, 0x80);
+
+        // 方向键掩码
+        assert_eq!(DPAD_UP, 0x81);
+        assert_eq!(DPAD_DOWN, 0x82);
+        assert_eq!(DPAD_LEFT, 0x84);
+        assert_eq!(DPAD_RIGHT, 0x88);
     }
 
     #[test]

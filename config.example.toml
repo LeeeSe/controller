@@ -59,8 +59,38 @@ pacer_loop_hz = 75
 # button_lb = "PrevTab"               # LB键 - 上一个标签页
 # button_rb = "NextTab"               # RB键 - 下一个标签页
 
+# === 新增：方向键映射 ===
+# dpad_up = "Refresh"                 # 上方向键 - 刷新页面 (Cmd+R)
+# dpad_down = "None"                  # 下方向键 - 无操作
+# dpad_left = "None"                  # 左方向键 - 无操作
+# dpad_right = "NewTab"               # 右方向键 - 新建标签页 (Cmd+T)
+
+# === 新增：组合键映射 ===
+# lt_x_combo = "QuitApp"              # LT + X组合键 - 退出应用程序 (Cmd+Q)
+
 # 自定义快捷键示例：
 # button_x = { CustomShortcut = { modifiers = ["cmd", "shift"], key = "t" } }
+
+# === 按键功能说明 ===
+
+# 基础按钮动作：
+# - "LeftClick"        : 鼠标左键点击
+# - "RightClick"       : 鼠标右键点击
+# - "CloseWindow"      : 关闭窗口 (Cmd+W)
+# - "MissionControl"   : 调度中心
+# - "PrevTab"          : 上一个标签页 (Cmd+Shift+[)
+# - "NextTab"          : 下一个标签页 (Cmd+Shift+])
+
+# 新增按钮动作：
+# - "QuitApp"          : 退出应用程序 (Cmd+Q)
+# - "NewTab"           : 新建标签页 (Cmd+T)
+# - "Refresh"          : 刷新页面 (Cmd+R)
+# - "None"             : 无操作
+
+# 组合键说明：
+# - LT + X 同时按下时触发 lt_x_combo 动作
+# - 当LT按下时，单独按X键不会触发 button_x 动作
+# - 方向键可以独立配置不同的功能
 
 # === 配置说明 ===
 

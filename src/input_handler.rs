@@ -1,6 +1,9 @@
 use crate::config::{ButtonAction, ButtonMappingConfig, ControllerConfig};
 use crate::error::{ControllerError, ControllerResult};
-use crate::hid::{BUTTON_A, BUTTON_B, BUTTON_LB, BUTTON_RB, BUTTON_X, BUTTON_Y, ControllerState};
+use crate::hid::{
+    BUTTON_A, BUTTON_B, BUTTON_LB, BUTTON_RB, BUTTON_X, BUTTON_Y, ControllerState, DPAD_DOWN,
+    DPAD_LEFT, DPAD_RIGHT, DPAD_UP,
+};
 use enigo::{
     Button as EnigoButton, Coordinate,
     Direction::{Click, Press, Release},
@@ -16,6 +19,9 @@ pub struct InputHandler {
     button_mapping: ButtonMappingConfig,
     last_buttons: HashSet<u8>,
     nav_flags: (bool, bool), // (左触发, 右触发)
+    screen_width: i32,
+    screen_height: i32,
+    lt_pressed: bool, // 跟踪LT是否按下，用于组合键检测
 }
 
 impl InputHandler {
@@ -28,12 +34,20 @@ impl InputHandler {
             ControllerError::InitializationFailed(format!("Enigo初始化失败: {}", e))
         })?;
 
+        // 获取屏幕尺寸（只需要获取一次）
+        let (screen_width, screen_height) = enigo.main_display().map_err(|e| {
+            ControllerError::InitializationFailed(format!("获取屏幕尺寸失败: {}", e))
+        })?;
+
         Ok(Self {
             enigo,
             config,
             button_mapping,
             last_buttons: HashSet::new(),
             nav_flags: (false, false),
+            screen_width: screen_width as i32,
+            screen_height: screen_height as i32,
+            lt_pressed: false,
         })
     }
 
@@ -43,13 +57,16 @@ impl InputHandler {
         state: &ControllerState,
         scroll_power: &Arc<Mutex<f64>>,
     ) -> ControllerResult<()> {
-        // 1. 处理按钮事件
+        // 1. 更新LT状态用于组合键检测
+        self.lt_pressed = state.lt > self.config.analog_trigger_threshold;
+
+        // 2. 处理按钮事件
         self.handle_button_events(state)?;
 
-        // 2. 处理光标移动（摇杆 + 陀螺仪）
+        // 3. 处理光标移动（摇杆 + 陀螺仪）
         self.handle_mouse_movement(state)?;
 
-        // 3. 处理右摇杆（滚动 + 导航）
+        // 4. 处理右摇杆（滚动 + 导航）
         self.handle_right_stick(state, scroll_power)?;
 
         Ok(())
@@ -76,16 +93,38 @@ impl InputHandler {
 
     /// 执行按钮动作
     fn execute_button_action(&mut self, button: u8, pressed: bool) -> ControllerResult<()> {
+        // 检查是否是LT + X组合键
+        if button == BUTTON_X && self.lt_pressed && pressed {
+            let action = self.button_mapping.lt_x_combo.clone();
+            self.execute_action(&action, pressed)?;
+            return Ok(());
+        }
+
         let action = match button {
-            BUTTON_A => &self.button_mapping.button_a,
-            BUTTON_B => &self.button_mapping.button_b,
-            BUTTON_X => &self.button_mapping.button_x,
-            BUTTON_Y => &self.button_mapping.button_y,
-            BUTTON_LB => &self.button_mapping.button_lb,
-            BUTTON_RB => &self.button_mapping.button_rb,
+            BUTTON_A => self.button_mapping.button_a.clone(),
+            BUTTON_B => self.button_mapping.button_b.clone(),
+            BUTTON_X => {
+                // 如果LT按下，X键被组合键处理，不单独执行
+                if self.lt_pressed {
+                    return Ok(());
+                }
+                self.button_mapping.button_x.clone()
+            }
+            BUTTON_Y => self.button_mapping.button_y.clone(),
+            BUTTON_LB => self.button_mapping.button_lb.clone(),
+            BUTTON_RB => self.button_mapping.button_rb.clone(),
+            DPAD_UP => self.button_mapping.dpad_up.clone(),
+            DPAD_DOWN => self.button_mapping.dpad_down.clone(),
+            DPAD_LEFT => self.button_mapping.dpad_left.clone(),
+            DPAD_RIGHT => self.button_mapping.dpad_right.clone(),
             _ => return Ok(()),
         };
 
+        self.execute_action(&action, pressed)
+    }
+
+    /// 执行具体的按键动作
+    fn execute_action(&mut self, action: &ButtonAction, pressed: bool) -> ControllerResult<()> {
         match action {
             ButtonAction::LeftClick => {
                 let direction = if pressed { Press } else { Release };
@@ -123,6 +162,21 @@ impl InputHandler {
             ButtonAction::NextTab => {
                 if pressed {
                     self.execute_shortcut(&[Key::Meta, Key::Shift], Key::Unicode(']'))?;
+                }
+            }
+            ButtonAction::QuitApp => {
+                if pressed {
+                    self.execute_shortcut(&[Key::Meta], Key::Unicode('q'))?;
+                }
+            }
+            ButtonAction::NewTab => {
+                if pressed {
+                    self.execute_shortcut(&[Key::Meta], Key::Unicode('t'))?;
+                }
+            }
+            ButtonAction::Refresh => {
+                if pressed {
+                    self.execute_shortcut(&[Key::Meta], Key::Unicode('r'))?;
                 }
             }
             ButtonAction::CustomShortcut { modifiers, key } => {
@@ -219,8 +273,22 @@ impl InputHandler {
 
         // 只有当移动量足够大时才移动鼠标
         if delta_x.abs() >= 0.01 || delta_y.abs() >= 0.01 {
+            // 获取当前光标位置
+            let current_pos = self.enigo.location().map_err(|e| {
+                ControllerError::InputSimulation(format!("获取光标位置失败: {}", e))
+            })?;
+
+            // 计算新位置
+            let new_x = (current_pos.0 as f64 + delta_x).round() as i32;
+            let new_y = (current_pos.1 as f64 + delta_y).round() as i32;
+
+            // 限制光标在屏幕边界内（使用预先获取的屏幕尺寸）
+            let clamped_x = new_x.max(0).min(self.screen_width - 1);
+            let clamped_y = new_y.max(0).min(self.screen_height - 1);
+
+            // 使用绝对坐标移动光标
             self.enigo
-                .move_mouse(delta_x as i32, delta_y as i32, Coordinate::Rel)
+                .move_mouse(clamped_x, clamped_y, Coordinate::Abs)
                 .map_err(|e| ControllerError::InputSimulation(format!("鼠标移动失败: {}", e)))?;
         }
 

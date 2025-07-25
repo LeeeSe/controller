@@ -143,6 +143,16 @@ pub struct ButtonMappingConfig {
     pub button_lb: ButtonAction,
     /// RB键功能
     pub button_rb: ButtonAction,
+    /// 上方向键功能
+    pub dpad_up: ButtonAction,
+    /// 下方向键功能
+    pub dpad_down: ButtonAction,
+    /// 左方向键功能
+    pub dpad_left: ButtonAction,
+    /// 右方向键功能
+    pub dpad_right: ButtonAction,
+    /// LT + X 组合键功能
+    pub lt_x_combo: ButtonAction,
 }
 
 impl Default for ButtonMappingConfig {
@@ -154,6 +164,11 @@ impl Default for ButtonMappingConfig {
             button_y: ButtonAction::MissionControl,
             button_lb: ButtonAction::PrevTab,
             button_rb: ButtonAction::NextTab,
+            dpad_up: ButtonAction::Refresh,
+            dpad_down: ButtonAction::None,
+            dpad_left: ButtonAction::None,
+            dpad_right: ButtonAction::NewTab,
+            lt_x_combo: ButtonAction::QuitApp,
         }
     }
 }
@@ -173,6 +188,12 @@ pub enum ButtonAction {
     PrevTab,
     /// 下一个标签页
     NextTab,
+    /// 退出应用程序 (Cmd+Q)
+    QuitApp,
+    /// 新建标签页 (Cmd+T)
+    NewTab,
+    /// 刷新页面 (Cmd+R)
+    Refresh,
     /// 自定义快捷键
     CustomShortcut { modifiers: Vec<String>, key: String },
     /// 无操作

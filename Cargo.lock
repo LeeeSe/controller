@@ -109,7 +109,7 @@ dependencies = [
 [[package]]
 name = "enigo"
 version = "0.5.0"
-source = "git+https://github.com/LeeeSe/enigo?branch=patch-1#b8e59e77e8188a923436ef89b0e26f3b17bb1e46"
+source = "git+https://github.com/LeeeSe/enigo?branch=add-macos-smooth-scroll#d01afabcc0f25cdae7074f57ab628fc0090a4695"
 dependencies = [
  "core-foundation",
  "core-graphics",

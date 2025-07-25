@@ -4,8 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+enigo = { git = "https://github.com/LeeeSe/enigo", branch = "add-macos-smooth-scroll", features = [
+    "platform_specific",
+] }
 dirs = "6.0.0"
-enigo = "0.5.0"
 hidapi = "2.6.3"
 serde = { version = "1.0.219", features = ["derive"] }
 toml = "0.9.2"
@@ -13,6 +15,3 @@ toml = "0.9.2"
 
 [dev-dependencies]
 tempfile = "3.0"
-
-[patch.crates-io]
-enigo = { git = "https://github.com/LeeeSe/enigo", branch = "patch-1" }

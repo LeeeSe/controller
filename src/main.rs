@@ -56,7 +56,7 @@ fn run_pacer_loop(scroll_power: Arc<Mutex<f64>>, config: ControllerConfig) {
                 // 正值向下滚动，负值向上滚动
                 if let Err(e) = scroll_handler
                     .enigo
-                    .scroll(-1 * scroll_delta, Axis::Vertical)
+                    .smooth_scroll(-1 * scroll_delta, Axis::Vertical)
                 {
                     eprintln!("滚动时出错: {}", e);
                 }
@@ -98,6 +98,26 @@ fn print_instructions(button_mapping: &ButtonMappingConfig) {
         " - RB 按钮：{}",
         format_button_action(&button_mapping.button_rb)
     );
+    println!(
+        " - 上方向键：{}",
+        format_button_action(&button_mapping.dpad_up)
+    );
+    println!(
+        " - 下方向键：{}",
+        format_button_action(&button_mapping.dpad_down)
+    );
+    println!(
+        " - 左方向键：{}",
+        format_button_action(&button_mapping.dpad_left)
+    );
+    println!(
+        " - 右方向键：{}",
+        format_button_action(&button_mapping.dpad_right)
+    );
+    println!(
+        " - LT + X 组合键：{}",
+        format_button_action(&button_mapping.lt_x_combo)
+    );
 
     println!("按 Ctrl+C 退出程序。");
     println!("{}", "-".repeat(40));
@@ -112,6 +132,9 @@ fn format_button_action(action: &config::ButtonAction) -> String {
         config::ButtonAction::MissionControl => "调度中心".to_string(),
         config::ButtonAction::PrevTab => "上一个标签页".to_string(),
         config::ButtonAction::NextTab => "下一个标签页".to_string(),
+        config::ButtonAction::QuitApp => "退出应用程序 (Cmd+Q)".to_string(),
+        config::ButtonAction::NewTab => "新建标签页 (Cmd+T)".to_string(),
+        config::ButtonAction::Refresh => "刷新页面 (Cmd+R)".to_string(),
         config::ButtonAction::CustomShortcut { modifiers, key } => {
             format!("自定义快捷键: {}+{}", modifiers.join("+"), key)
         }
