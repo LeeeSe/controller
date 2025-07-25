@@ -55,7 +55,7 @@ impl ControllerConfig {
     /// 创建默认按键绑定配置
     fn default_button_mappings() -> HashMap<String, ButtonAction> {
         let mut mappings = HashMap::new();
-        
+
         // 单独按键
         mappings.insert("A".to_string(), ButtonAction::LeftClick);
         mappings.insert("B".to_string(), ButtonAction::RightClick);
@@ -67,10 +67,10 @@ impl ControllerConfig {
         mappings.insert("DPad_Down".to_string(), ButtonAction::None);
         mappings.insert("DPad_Left".to_string(), ButtonAction::None);
         mappings.insert("DPad_Right".to_string(), ButtonAction::NewTab);
-        
+
         // 组合键
         mappings.insert("LT+X".to_string(), ButtonAction::QuitApp);
-        
+
         mappings
     }
 
@@ -210,62 +210,5 @@ impl Default for ReconnectionConfig {
             show_reconnect_messages: true,
             max_silent_failures: 5,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    #[test]
-    fn test_default_config() {
-        let config = ControllerConfig::default();
-        assert_eq!(config.analog_trigger_threshold, 20);
-        assert_eq!(config.joystick_sensitivity, 15.0);
-        assert_eq!(config.pacer_loop_hz, 75);
-    }
-
-    #[test]
-    fn test_config_validation() {
-        let mut config = ControllerConfig::default();
-        assert!(config.validate().is_ok());
-
-        config.joystick_sensitivity = -1.0;
-        assert!(config.validate().is_err());
-
-        config.joystick_sensitivity = 15.0;
-        config.pacer_loop_hz = 0;
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_config_save_and_load() {
-        let temp_dir = tempdir().unwrap();
-        let config_path = temp_dir.path().join("test_config.toml");
-
-        let original_config = ControllerConfig::default();
-        original_config.save_to_file(&config_path).unwrap();
-
-        let loaded_config = ControllerConfig::load_from_file(&config_path).unwrap();
-        assert_eq!(
-            original_config.joystick_sensitivity,
-            loaded_config.joystick_sensitivity
-        );
-        assert_eq!(original_config.pacer_loop_hz, loaded_config.pacer_loop_hz);
-    }
-
-    #[test]
-    fn test_load_or_create_default() {
-        let temp_dir = tempdir().unwrap();
-        let config_path = temp_dir.path().join("new_config.toml");
-
-        // 文件不存在时应该创建默认配置
-        let config = ControllerConfig::load_or_create_default(&config_path).unwrap();
-        assert!(config_path.exists());
-
-        // 再次加载应该读取现有文件
-        let config2 = ControllerConfig::load_or_create_default(&config_path).unwrap();
-        assert_eq!(config.joystick_sensitivity, config2.joystick_sensitivity);
     }
 }

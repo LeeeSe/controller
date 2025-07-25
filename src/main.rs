@@ -53,10 +53,17 @@ fn run_pacer_loop(scroll_power: Arc<Mutex<f64>>, config: ControllerConfig) {
         if power.abs() > 0.01 {
             let scroll_delta = power.round() as i32;
             if scroll_delta != 0 {
+                // 安全的整数取负，避免溢出
+                let safe_scroll_delta = if scroll_delta == i32::MIN {
+                    i32::MAX
+                } else {
+                    -scroll_delta
+                };
+                
                 // 正值向下滚动，负值向上滚动
                 if let Err(e) = scroll_handler
                     .enigo
-                    .smooth_scroll(-1 * scroll_delta, Axis::Vertical)
+                    .smooth_scroll(safe_scroll_delta, Axis::Vertical)
                 {
                     eprintln!("滚动时出错: {}", e);
                 }

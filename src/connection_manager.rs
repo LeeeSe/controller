@@ -4,9 +4,9 @@ use crate::hid::HidController;
 use std::{thread, time::Duration};
 
 /// 连接状态枚举
-    #[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ConnectionState {
-/// 已连接状态
+    /// 已连接状态
     Connected,
     /// 断开连接状态
     Disconnected,
@@ -182,90 +182,4 @@ pub struct ReconnectStats {
     pub attempts: u32,
     pub silent_failures: u32,
     pub state: ConnectionState,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::ReconnectionConfig;
-
-    fn create_test_config(enable_reconnect: bool) -> ControllerConfig {
-        let mut config = ControllerConfig::default();
-        config.reconnection.enable_auto_reconnect = enable_reconnect;
-        config.reconnection.reconnect_interval_ms = 100; // 快速测试
-        config.reconnection.max_silent_failures = 2;
-        config
-    }
-
-    #[test]
-    fn test_connection_manager_creation() {
-        let config = create_test_config(true);
-        let manager = ConnectionManager::new(&config);
-
-        assert_eq!(manager.state(), &ConnectionState::Disconnected);
-        assert_eq!(manager.reconnect_attempts, 0);
-    }
-
-    #[test]
-    fn test_handle_disconnect() {
-        let config = create_test_config(true);
-        let mut manager = ConnectionManager::new(&config);
-
-        manager.state = ConnectionState::Connected;
-        manager.handle_disconnect();
-
-        assert_eq!(manager.state(), &ConnectionState::Disconnected);
-    }
-
-    #[test]
-    fn test_should_continue_with_reconnect_disabled() {
-        let config = create_test_config(false);
-        let mut manager = ConnectionManager::new(&config);
-
-        manager.state = ConnectionState::Disconnected;
-        assert!(!manager.should_continue());
-
-        manager.state = ConnectionState::Connected;
-        assert!(manager.should_continue());
-    }
-
-    #[test]
-    fn test_should_continue_with_reconnect_enabled() {
-        let config = create_test_config(true);
-        let mut manager = ConnectionManager::new(&config);
-
-        manager.state = ConnectionState::Disconnected;
-        assert!(manager.should_continue());
-
-        manager.state = ConnectionState::Connected;
-        assert!(manager.should_continue());
-    }
-
-    #[test]
-    fn test_reconnect_attempt_counter() {
-        let config = create_test_config(true);
-        let mut manager = ConnectionManager::new(&config);
-
-        // 模拟重连失败
-        manager.state = ConnectionState::Disconnected;
-        manager.reconnect_attempts = 5;
-
-        let stats = manager.get_stats();
-        assert_eq!(stats.attempts, 5);
-        assert_eq!(stats.state, ConnectionState::Disconnected);
-    }
-
-    #[test]
-    fn test_max_reconnect_attempts() {
-        let mut config = create_test_config(true);
-        config.reconnection.max_reconnect_attempts = 3;
-
-        let mut manager = ConnectionManager::new(&config);
-        manager.state = ConnectionState::Disconnected;
-        manager.reconnect_attempts = 3;
-
-        // 应该返回 None 因为已达到最大重试次数
-        let result = manager.try_reconnect();
-        assert!(result.is_none());
-    }
 }

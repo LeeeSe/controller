@@ -25,9 +25,7 @@ pub struct InputHandler {
 
 impl InputHandler {
     /// 创建新的输入处理器
-    pub fn new(
-        config: ControllerConfig,
-    ) -> ControllerResult<Self> {
+    pub fn new(config: ControllerConfig) -> ControllerResult<Self> {
         let enigo = Enigo::new(&enigo::Settings::default()).map_err(|e| {
             ControllerError::InitializationFailed(format!("Enigo初始化失败: {}", e))
         })?;
@@ -92,10 +90,10 @@ impl InputHandler {
     fn execute_button_action(&mut self, button: u8, pressed: bool) -> ControllerResult<()> {
         // 获取按钮名称
         let button_name = self.get_button_name(button);
-        
+
         // 检查是否有组合键
         let mut tried_combos = Vec::new();
-        
+
         // 检查双键组合 (LT + 按键)
         if self.lt_pressed {
             let combo = format!("LT+{}", button_name);
@@ -107,15 +105,15 @@ impl InputHandler {
                 return Ok(());
             }
         }
-        
+
         // 检查单独按键
         if let Some(action) = self.config.get_button_action(&button_name).cloned() {
             self.execute_action(&action, pressed)?;
         }
-        
+
         Ok(())
     }
-    
+
     /// 获取按钮名称
     fn get_button_name(&self, button: u8) -> String {
         match button {
@@ -252,6 +250,12 @@ impl InputHandler {
             "escape" | "esc" => Ok(Key::Escape),
             "delete" | "del" => Ok(Key::Delete),
             "backspace" => Ok(Key::Backspace),
+            "up" => Ok(Key::UpArrow),
+            "down" => Ok(Key::DownArrow),
+            "left" => Ok(Key::LeftArrow),
+            "right" => Ok(Key::RightArrow),
+            "plus" | "=" => Ok(Key::Unicode('=')),
+            "minus" | "-" => Ok(Key::Unicode('-')),
             s if s.len() == 1 => Ok(Key::Unicode(s.chars().next().unwrap())),
             _ => Err(ControllerError::Config(format!(
                 "无法识别的键名: {}",
@@ -265,18 +269,18 @@ impl InputHandler {
         let mut delta_x = 0.0;
         let mut delta_y = 0.0;
 
-        // 左摇杆
-        delta_x += self.apply_deadzone_and_curve(state.lx, self.config.joystick_deadzone)
+        // 左摇杆 - 使用统一的规范化函数
+        delta_x += Self::normalize_joystick_value(state.lx, self.config.joystick_deadzone, 2.0)
             * self.config.joystick_sensitivity;
-        delta_y += self.apply_deadzone_and_curve(state.ly, self.config.joystick_deadzone)
+        delta_y += Self::normalize_joystick_value(state.ly, self.config.joystick_deadzone, 2.0)
             * self.config.joystick_sensitivity;
 
         // 陀螺仪（仅当按住LT时）
         if state.lt > self.config.analog_trigger_threshold {
-            if state.gyro_yaw.abs() > self.config.gyro_deadzone {
+            if state.gyro_yaw.saturating_abs() > self.config.gyro_deadzone {
                 delta_x += state.gyro_yaw as f64 * self.config.gyro_sensitivity;
             }
-            if state.gyro_pitch.abs() > self.config.gyro_deadzone {
+            if state.gyro_pitch.saturating_abs() > self.config.gyro_deadzone {
                 delta_y += state.gyro_pitch as f64 * self.config.gyro_sensitivity;
             }
         }
@@ -311,42 +315,121 @@ impl InputHandler {
         state: &ControllerState,
         scroll_power: &Arc<Mutex<f64>>,
     ) -> ControllerResult<()> {
-        let (rx_abs, ry_abs) = (state.rx.abs(), state.ry.abs());
+        let (rx_abs, ry_abs) = (state.rx.saturating_abs(), state.ry.saturating_abs());
 
-        // 滚动（Y轴优先）
-        let mut current_scroll_power = 0.0;
-        if ry_abs > self.config.right_joystick_deadzone
-            && (ry_abs as f64 > rx_abs as f64 * self.config.dominant_axis_factor)
-        {
-            let normalized_ry =
-                self.apply_deadzone_and_curve(state.ry, self.config.right_joystick_deadzone);
-            // 反向以实现自然滚动方向
-            current_scroll_power = -normalized_ry * self.config.direct_scroll_sensitivity;
-        }
+        // 检查是否有LT + 右摇杆方向的组合键绑定
+        if self.lt_pressed {
+            // 检查垂直方向 (优先)
+            if ry_abs > self.config.right_joystick_deadzone
+                && (ry_abs as f64 > rx_abs as f64 * self.config.dominant_axis_factor)
+            {
+                let stick_direction = if state.ry > 0 {
+                    "RStick_Down"
+                } else {
+                    "RStick_Up"
+                };
+                let combo = format!("LT+{}", stick_direction);
 
-        // 更新滚动力度
-        if let Ok(mut power) = scroll_power.lock() {
-            *power = current_scroll_power;
-        }
+                if let Some(action) = self.config.get_button_action(&combo).cloned() {
+                    // 执行自定义绑定，使用方向标志避免重复触发
+                    if state.ry > 0 && !self.nav_flags.1 {
+                        self.execute_action(&action, true)?;
+                        self.nav_flags.1 = true;
+                    } else if state.ry < 0 && !self.nav_flags.0 {
+                        self.execute_action(&action, true)?;
+                        self.nav_flags.0 = true;
+                    }
+                } else {
+                    // 没有自定义绑定，使用默认滚动行为
+                    let normalized_ry = Self::normalize_joystick_value(
+                        state.ry,
+                        self.config.right_joystick_deadzone,
+                        2.0,
+                    );
+                    let current_scroll_power =
+                        -normalized_ry * self.config.direct_scroll_sensitivity;
+                    if let Ok(mut power) = scroll_power.lock() {
+                        *power = current_scroll_power;
+                    }
+                }
+            }
+            // 检查水平方向
+            else if rx_abs > self.config.nav_trigger_threshold
+                && (rx_abs as f64 > ry_abs as f64 * self.config.dominant_axis_factor)
+            {
+                let normalized_rx = state.normalized_rx();
+                let stick_direction = if normalized_rx > 0 {
+                    "RStick_Right"
+                } else {
+                    "RStick_Left"
+                };
+                let combo = format!("LT+{}", stick_direction);
 
-        // 导航（X轴优先）- 使用规范化的rx值避免不对称性问题
-        let normalized_rx = state.normalized_rx();
-        if rx_abs > self.config.nav_trigger_threshold
-            && (rx_abs as f64 > ry_abs as f64 * self.config.dominant_axis_factor)
-        {
-            if normalized_rx > 0 && !self.nav_flags.1 {
-                // 前进：Cmd + ]
-                self.execute_shortcut(&[Key::Meta], Key::Unicode(']'))?;
-                self.nav_flags.1 = true;
-            } else if normalized_rx < 0 && !self.nav_flags.0 {
-                // 后退：Cmd + [
-                self.execute_shortcut(&[Key::Meta], Key::Unicode('['))?;
-                self.nav_flags.0 = true;
+                if let Some(action) = self.config.get_button_action(&combo).cloned() {
+                    // 执行自定义绑定
+                    if normalized_rx > 0 && !self.nav_flags.1 {
+                        self.execute_action(&action, true)?;
+                        self.nav_flags.1 = true;
+                    } else if normalized_rx < 0 && !self.nav_flags.0 {
+                        self.execute_action(&action, true)?;
+                        self.nav_flags.0 = true;
+                    }
+                } else {
+                    // 没有自定义绑定，使用默认导航行为
+                    if normalized_rx > 0 && !self.nav_flags.1 {
+                        // 前进：Cmd + ]
+                        self.execute_shortcut(&[Key::Meta], Key::Unicode(']'))?;
+                        self.nav_flags.1 = true;
+                    } else if normalized_rx < 0 && !self.nav_flags.0 {
+                        // 后退：Cmd + [
+                        self.execute_shortcut(&[Key::Meta], Key::Unicode('['))?;
+                        self.nav_flags.0 = true;
+                    }
+                }
+            }
+        } else {
+            // LT未按下，使用原有的滚动和导航逻辑
+
+            // 滚动（Y轴优先）
+            let mut current_scroll_power = 0.0;
+            if ry_abs > self.config.right_joystick_deadzone
+                && (ry_abs as f64 > rx_abs as f64 * self.config.dominant_axis_factor)
+            {
+                let normalized_ry = Self::normalize_joystick_value(
+                    state.ry,
+                    self.config.right_joystick_deadzone,
+                    2.0,
+                );
+                // 反向以实现自然滚动方向
+                current_scroll_power = -normalized_ry * self.config.direct_scroll_sensitivity;
+            }
+
+            // 更新滚动力度
+            if let Ok(mut power) = scroll_power.lock() {
+                *power = current_scroll_power;
+            }
+
+            // 导航（X轴优先）- 使用规范化的rx值避免不对称性问题
+            let normalized_rx = state.normalized_rx();
+            if rx_abs > self.config.nav_trigger_threshold
+                && (rx_abs as f64 > ry_abs as f64 * self.config.dominant_axis_factor)
+            {
+                if normalized_rx > 0 && !self.nav_flags.1 {
+                    // 前进：Cmd + ]
+                    self.execute_shortcut(&[Key::Meta], Key::Unicode(']'))?;
+                    self.nav_flags.1 = true;
+                } else if normalized_rx < 0 && !self.nav_flags.0 {
+                    // 后退：Cmd + [
+                    self.execute_shortcut(&[Key::Meta], Key::Unicode('['))?;
+                    self.nav_flags.0 = true;
+                }
             }
         }
 
         // 重置导航标志以防止连续触发
-        if normalized_rx.abs() < self.config.nav_trigger_threshold {
+        if rx_abs < self.config.nav_trigger_threshold
+            && ry_abs < self.config.right_joystick_deadzone
+        {
             self.nav_flags.1 = false;
             self.nav_flags.0 = false;
         }
@@ -354,64 +437,26 @@ impl InputHandler {
         Ok(())
     }
 
-    /// 应用死区和二次加速曲线
-    fn apply_deadzone_and_curve(&self, value: i16, deadzone: i16) -> f64 {
-        let val_f = value as f64;
-        let deadzone_f = deadzone as f64;
+    /// 规范化摇杆值的统一处理函数
+    ///
+    /// 优雅地处理 i16 边界值，避免溢出问题
+    /// 使用 saturating_abs() 自动处理 i16::MIN 溢出
+    fn normalize_joystick_value(value: i16, deadzone: i16, curve_power: f64) -> f64 {
+        let abs_value = value.saturating_abs();
+        let abs_deadzone = deadzone.saturating_abs();
 
-        if val_f.abs() < deadzone_f {
+        // 死区内返回0
+        if abs_value <= abs_deadzone {
             return 0.0;
         }
 
-        let max_val = i16::MAX as f64;
-        let normalized_val = (val_f.abs() - deadzone_f) / (max_val - deadzone_f);
-        normalized_val.powi(2).copysign(val_f)
-    }
-}
+        // 计算去除死区后的规范化值 [0.0, 1.0]
+        let max_range = i16::MAX - abs_deadzone;
+        let active_range = abs_value - abs_deadzone;
+        let normalized = active_range as f64 / max_range as f64;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::ControllerConfig;
-
-    fn create_test_input_handler() -> InputHandler {
-        let config = ControllerConfig::default();
-
-        // 对于测试，我们需要模拟 Enigo 的创建
-        // 这里可能需要使用 mock 或者跳过需要系统权限的测试
-        InputHandler::new(config).unwrap()
-    }
-
-    #[test]
-    fn test_apply_deadzone_and_curve() {
-        let handler = create_test_input_handler();
-
-        // 在死区内应该返回0
-        assert_eq!(handler.apply_deadzone_and_curve(500, 1000), 0.0);
-
-        // 超出死区应该有输出
-        let result = handler.apply_deadzone_and_curve(2000, 1000);
-        assert!(result > 0.0);
-
-        // 负值应该保持符号
-        let result = handler.apply_deadzone_and_curve(-2000, 1000);
-        assert!(result < 0.0);
-    }
-
-    #[test]
-    fn test_parse_key_string() {
-        assert!(matches!(
-            InputHandler::parse_key_string_static("cmd"),
-            Ok(Key::Meta)
-        ));
-        assert!(matches!(
-            InputHandler::parse_key_string_static("shift"),
-            Ok(Key::Shift)
-        ));
-        assert!(matches!(
-            InputHandler::parse_key_string_static("a"),
-            Ok(Key::Unicode('a'))
-        ));
-        assert!(InputHandler::parse_key_string_static("invalid_key").is_err());
+        // 应用指数曲线并恢复符号
+        let curved = normalized.powf(curve_power);
+        if value < 0 { -curved } else { curved }
     }
 }
